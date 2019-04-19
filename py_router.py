@@ -1,12 +1,9 @@
-def create_router(*rules):
+def create(*rules):
     routes, handlers = create_routes_and_handlers(*rules)
     scope = {}
     exec(compile(create_dispatch_src(routes), '<string>', 'exec'), scope)
 
-    def dispatch_fn(url):
-        return scope['dispatch'](url.strip('/').split('/'), handlers)
-
-    return dispatch_fn
+    return lambda url: scope['dispatch'](url.strip('/').split('/'), handlers)
 
 
 def create_routes_and_handlers(*rules):
@@ -15,43 +12,28 @@ def create_routes_and_handlers(*rules):
     for i, uri_and_value in enumerate(rules):
         uri, value = uri_and_value
         parts = uri.strip('/').split('/')
-        dynamic_parts = {}
-
-        for part in parts:
-            part_is_dynamic = part.startswith('<') and part.endswith('>')
-            if part_is_dynamic:
-                dynamic_parts[part] = part[1:-1]
-
         routes.setdefault(len(parts), [])
-        routes[len(parts)].append((parts, dynamic_parts, i))
+        routes[len(parts)].append((parts, i))
 
     return routes, tuple(r[1] for r in rules)
 
 
 def create_dispatch_src(routes):
     tab = '    '
+    src = ['def dispatch(path, handlers):', tab + 'length = len(path)']
 
-    nest_level = 1
-    src = ['', 'def dispatch(path, handlers):', tab + 'length = len(path)']
-
-    for length, r_list in routes.items():
-        src.append(f'{nest_level * tab}if length == {length}:')
-        nest_level += 1
-        for parts, dynamic_parts, value in r_list:
-            if_start = f'{nest_level * tab}if '
+    for length, optimised_routes in routes.items():
+        src.append(tab + f'if length == {length}:')
+        for parts, value in optimised_routes:
+            if_start = 2 * tab + 'if '
             conditions = [f'path[{i}] == \'{part}\''
-                          for i, part in enumerate(parts) if part not in dynamic_parts]
-            dict_args = [f'\'{dynamic_parts[part]}\': path[{i}]'
-                         for i, part in enumerate(parts) if part in dynamic_parts]
-            returned_dict = '{' + ', '.join(dict_args) + '}'
+                          for i, part in enumerate(parts) if not part.startswith(':')]
             src.append(if_start + ' and '.join(conditions) + ':')
 
-            nest_level += 1
-            src.append(f'{nest_level * tab}return handlers[{value}], {returned_dict}')
+            dict_args = [f'\'{part[1:]}\': path[{i}]'
+                         for i, part in enumerate(parts) if part.startswith(':')]
+            returned_dict = '{' + ', '.join(dict_args) + '}'
+            src.append(3 * tab + f'return handlers[{value}], {returned_dict}')
 
-            nest_level -= 1
-
-        nest_level -= 1
-
-    src.append(tab + 'return None, {}\n')
+    src.append(tab + 'return None, {}')
     return '\n'.join(src)
